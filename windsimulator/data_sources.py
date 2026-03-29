@@ -49,6 +49,9 @@ def parse_incident_time(incident_time: str | datetime | None) -> datetime | None
     if isinstance(incident_time, datetime):
         dt = incident_time
     else:
+        normalized_input = incident_time.strip().lower()
+        if normalized_input in {"auto", "next_hour", "next_forecast_hour"}:
+            return None
         normalized = incident_time.replace("Z", "+00:00")
         dt = datetime.fromisoformat(normalized)
     if dt.tzinfo is None:

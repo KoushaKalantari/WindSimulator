@@ -60,7 +60,7 @@ def run_notebook_forecast_alarm_demo(**kwargs):
 
 def run_notebook_incident_demo(
     location: tuple[float, float],
-    incident_time=None,
+    incident_time="auto",
     severity: str | float = "severe",
     **kwargs,
 ):
@@ -70,9 +70,10 @@ def run_notebook_incident_demo(
 
     kwargs.setdefault("incident_type", "leakage")
     kwargs.setdefault("name", "Forecast Hazard Demo")
-    kwargs.setdefault("duration_hours", 6)
-    kwargs.setdefault("forecast_hours", 24)
-    kwargs.setdefault("simulation_resolution", 20)
+    kwargs.setdefault("duration_hours", 3)
+    kwargs.setdefault("forecast_hours", 6)
+    kwargs.setdefault("simulation_resolution", 10)
+    kwargs.setdefault("verbose", True)
     return run_forecast_alarm_demo(
         source_latitude=float(location[0]),
         source_longitude=float(location[1]),

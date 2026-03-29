@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -24,7 +24,7 @@ from .emergency import HazardIncident
 
 
 BAND_PRIORITY = {"MINIMAL": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3}
-DEFAULT_TOP_LOCATION_COUNT = 8
+DEFAULT_TOP_LOCATION_COUNT = 5
 DEFAULT_TOP_LOCATION_SPACING_KM = 2.5
 
 FRAME_REPORT_COLUMNS = [
@@ -532,6 +532,11 @@ def build_geo_notice_payloads(top_locations: pd.DataFrame) -> list[dict[str, Any
     return payloads
 
 
+def _emit_progress(progress_callback: Callable[[str], None] | None, message: str) -> None:
+    if progress_callback is not None:
+        progress_callback(message)
+
+
 def simulate_forecast_alarm(
     source_latitude: float,
     source_longitude: float,
@@ -546,6 +551,7 @@ def simulate_forecast_alarm(
     simulation_resolution: int = 40,
     stability_class: str | None = None,
     release_height_m: float | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> ForecastAlarmSimulation:
     incident = HazardIncident(
         name=name,
@@ -565,6 +571,10 @@ def simulate_forecast_alarm(
         if neighborhoods is not None
         else None
     )
+    _emit_progress(
+        progress_callback,
+        f"1/5 Fetching hourly weather forecast near ({source_latitude:.4f}, {source_longitude:.4f}).",
+    )
     weather_df = fetch_hourly_weather_forecast(
         latitude=source_latitude,
         longitude=source_longitude,
@@ -574,6 +584,11 @@ def simulate_forecast_alarm(
         weather_df=weather_df,
         incident_time=incident_time,
         duration_hours=duration_hours,
+    )
+    _emit_progress(
+        progress_callback,
+        "2/5 Sampling public elevation data and building the terrain grid "
+        f"at resolution {simulation_resolution}x{simulation_resolution}.",
     )
 
     terrain_cfg = copy_config(
@@ -591,6 +606,10 @@ def simulate_forecast_alarm(
 
     frames: list[ForecastAlarmFrame] = []
     frame_reports: list[pd.DataFrame] = []
+    _emit_progress(
+        progress_callback,
+        f"3/5 Simulating {len(weather_window)} hourly plume snapshots using the forecast wind steps.",
+    )
     for weather_row in weather_window.to_dict(orient="records"):
         frame_incident = HazardIncident(
             name=name,
@@ -646,6 +665,10 @@ def simulate_forecast_alarm(
         neighborhood_summary = pd.DataFrame()
         impacted_neighborhoods = pd.DataFrame()
 
+    _emit_progress(
+        progress_callback,
+        "4/5 Reverse-geocoding the strongest simulated hotspots into neighborhood, city, and ZIP labels.",
+    )
     top_locations = build_top_location_report(
         incident_name=name,
         incident_type=incident_type,
@@ -677,6 +700,11 @@ def simulate_forecast_alarm(
         impacted_neighborhoods = top_neighborhoods[top_neighborhoods["BroadcastRecommended"]].reset_index(
             drop=True
         )
+
+    _emit_progress(
+        progress_callback,
+        "5/5 Packaging the overlay, timelapse, ranked impact tables, and draft notice payloads.",
+    )
 
     return ForecastAlarmSimulation(
         incident=incident,

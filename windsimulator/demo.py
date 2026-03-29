@@ -49,6 +49,34 @@ def _display_table(title: str, df: pd.DataFrame) -> None:
     _display(df)
 
 
+def _progress_line(message: str) -> None:
+    print(message)
+
+
+def _print_forecast_run_summary(simulation: ForecastAlarmSimulation) -> None:
+    if simulation.weather_window.empty:
+        return
+    start_time = simulation.weather_window.iloc[0]["timestamp"]
+    end_time = simulation.weather_window.iloc[-1]["timestamp"]
+    print(
+        "Run summary: "
+        f"{len(simulation.frames)} forecast steps from "
+        f"{start_time.strftime('%Y-%m-%d %H:%M UTC')} to "
+        f"{end_time.strftime('%Y-%m-%d %H:%M UTC')}."
+    )
+    print(
+        "Under the hood: "
+        "public weather forecast -> terrain elevation grid -> plume snapshots -> "
+        "reverse-geocoded hotspots -> ranked alert tables."
+    )
+    if not simulation.top_locations.empty:
+        top_band = simulation.top_locations.iloc[0]["PeakBand"]
+        print(
+            f"Top hotspot labels found: {len(simulation.top_locations)} "
+            f"(highest simulated band: {top_band})."
+        )
+
+
 def run_demo_experiment(
     cfg: PlumeConfig = DEFAULT_CONFIG,
     neighborhoods: dict[str, tuple[float, float]] = FICTIONAL_NEIGHBORHOODS,
@@ -159,7 +187,14 @@ def run_forecast_alarm_demo(
     stability_class: str | None = None,
     release_height_m: float | None = None,
     show_animation: bool = True,
+    verbose: bool = False,
 ) -> ForecastAlarmSimulation:
+    if verbose:
+        print(
+            "Starting forecast-driven hazard demo.\n"
+            f"Inputs: location=({source_latitude:.4f}, {source_longitude:.4f}), "
+            f"incident_time={incident_time}, severity={severity}, incident_type={incident_type}."
+        )
     simulation = simulate_forecast_alarm(
         source_latitude=source_latitude,
         source_longitude=source_longitude,
@@ -174,7 +209,10 @@ def run_forecast_alarm_demo(
         simulation_resolution=simulation_resolution,
         stability_class=stability_class,
         release_height_m=release_height_m,
+        progress_callback=_progress_line if verbose else None,
     )
+    if verbose:
+        _print_forecast_run_summary(simulation)
     peak_index = 0
     if simulation.frames:
         peak_index = max(
