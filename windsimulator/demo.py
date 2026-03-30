@@ -5,9 +5,19 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from matplotlib.animation import FuncAnimation
 
 from .analysis import sample_neighborhoods, scenario_configs, scenario_pivots, scenario_summary
-from .config import DEFAULT_CONFIG, DEFAULT_SCENARIOS, FICTIONAL_NEIGHBORHOODS, MODEL_NOTES, PlumeConfig
+from .config import (
+    DEFAULT_CONFIG,
+    DEFAULT_FORECAST_FRAME_INTERVAL_MINUTES,
+    DEFAULT_FORECAST_SIMULATION_RESOLUTION,
+    DEFAULT_SCENARIOS,
+    DEFAULT_TERRAIN_SURFACE_RESOLUTION,
+    FICTIONAL_NEIGHBORHOODS,
+    MODEL_NOTES,
+    PlumeConfig,
+)
 from .emergency import AlertPlan, HazardIncident, analyze_incident_alert
 from .forecast_alarm import ForecastAlarmSimulation, simulate_forecast_alarm
 from .plotting import (
@@ -35,8 +45,14 @@ class DemoResults:
 
 def _display(obj) -> None:
     try:
-        from IPython.display import display
+        from IPython.display import HTML, display
 
+        if isinstance(obj, FuncAnimation):
+            try:
+                display(HTML(obj.to_jshtml()))
+                return
+            except Exception:
+                pass
         display(obj)
     except Exception:
         print(obj)
@@ -49,8 +65,64 @@ def _display_table(title: str, df: pd.DataFrame) -> None:
     _display(df)
 
 
+def _notice_table_for_display(simulation: ForecastAlarmSimulation) -> pd.DataFrame:
+    neighborhood_table = getattr(simulation, "top_neighborhoods", pd.DataFrame()).copy()
+    if neighborhood_table.empty:
+        neighborhood_table = getattr(simulation, "impacted_neighborhoods", pd.DataFrame()).copy()
+    if neighborhood_table.empty:
+        return pd.DataFrame(
+            columns=[
+                "Neighborhood",
+                "City",
+                "NoticeType",
+                "PeakBand",
+                "FirstImpactedTime",
+                "RecommendedAction",
+                "Priority",
+            ]
+        )
+
+    if "BroadcastRecommended" in neighborhood_table.columns:
+        neighborhood_table = neighborhood_table[neighborhood_table["BroadcastRecommended"]].copy()
+    if neighborhood_table.empty:
+        return pd.DataFrame(
+            columns=[
+                "Neighborhood",
+                "City",
+                "NoticeType",
+                "PeakBand",
+                "FirstImpactedTime",
+                "RecommendedAction",
+                "Priority",
+            ]
+        )
+
+    if "PeakBand" not in neighborhood_table.columns and "Band" in neighborhood_table.columns:
+        neighborhood_table["PeakBand"] = neighborhood_table["Band"]
+    if "City" not in neighborhood_table.columns:
+        neighborhood_table["City"] = ""
+
+    display_table = neighborhood_table.reindex(
+        columns=[
+            "Neighborhood",
+            "City",
+            "NoticeLevel",
+            "PeakBand",
+            "FirstImpactedTime",
+            "RecommendedAction",
+            "BroadcastPriorityRank",
+        ]
+    ).rename(
+        columns={
+            "NoticeLevel": "NoticeType",
+            "BroadcastPriorityRank": "Priority",
+        }
+    )
+    return display_table.reset_index(drop=True)
+
+
 def _progress_line(message: str) -> None:
-    print(message)
+    print(message, flush=True)
 
 
 def _print_forecast_run_summary(simulation: ForecastAlarmSimulation) -> None:
@@ -65,15 +137,49 @@ def _print_forecast_run_summary(simulation: ForecastAlarmSimulation) -> None:
         f"{end_time.strftime('%Y-%m-%d %H:%M UTC')}."
     )
     print(
-        "Under the hood: "
-        "public weather forecast -> terrain elevation grid -> plume snapshots -> "
-        "reverse-geocoded hotspots -> ranked alert tables."
+        "Resolved duration: "
+        f"{simulation.resolved_duration_hours:.1f} h "
+        f"({simulation.duration_basis})."
     )
+    print(
+        "Under the hood: "
+        "public weather forecast -> terrain elevation grid -> source-term-aware plume snapshots -> "
+        "uncertainty envelopes -> action polygons -> ranked alert tables."
+    )
+    print(
+        "Resolved source term: "
+        f"{simulation.source_term.profile_label} | "
+        f"{simulation.source_term.emission_rate:.0f} mass/s for "
+        f"{simulation.source_term.release_duration_minutes:.0f} min with "
+        f"{simulation.source_term.initial_pulse_mass:.0f} initial pulse mass."
+    )
+    print(
+        "Airborne persistence: "
+        f"{simulation.material_fate.profile_label} | "
+        f"reactive half-life "
+        f"{simulation.material_fate.reactive_airborne_half_life_minutes if simulation.material_fate.reactive_airborne_half_life_minutes is not None else 'n/a'} min, "
+        f"deposition half-life "
+        f"{simulation.material_fate.deposition_half_life_minutes if simulation.material_fate.deposition_half_life_minutes is not None else 'n/a'} min."
+    )
+    if not simulation.uncertainty_summary.empty:
+        print(
+            f"Uncertainty envelopes: {len(simulation.uncertainty_summary)} "
+            "scenario layers (likely, conservative, worst reasonable)."
+        )
+    if not simulation.action_polygons.empty:
+        print(
+            f"Action polygons generated: {len(simulation.action_polygons)} "
+            "layered areas with GeoJSON-ready geometry."
+        )
     if not simulation.top_locations.empty:
         top_band = simulation.top_locations.iloc[0]["PeakBand"]
         print(
             f"Top hotspot labels found: {len(simulation.top_locations)} "
             f"(highest simulated band: {top_band})."
+        )
+        print(
+            "Broadcast ranking: NoticeLevel (Immediate Action > Warning > Advisory > Monitor), "
+            "then CAPUrgency (Immediate > Expected > Future), then earliest impact time, then peak concentration."
         )
 
 
@@ -162,7 +268,15 @@ def run_alarm_demo(
     if not alert_plan.impacted_neighborhoods.empty:
         _display(
             alert_plan.impacted_neighborhoods[
-                ["Neighborhood", "Band", "Concentration", "RecommendedAction"]
+                [
+                    "BroadcastPriorityRank",
+                    "Neighborhood",
+                    "NoticeLevel",
+                    "CAPUrgency",
+                    "Band",
+                    "Concentration",
+                    "RecommendedAction",
+                ]
             ]
         )
     if alert_plan.notice_payloads:
@@ -181,11 +295,21 @@ def run_forecast_alarm_demo(
     incident_type: str = "leakage",
     name: str = "Forecast Hazard Alarm Demo",
     neighborhoods: dict[str, tuple[float, float]] | None = None,
-    duration_hours: int = 12,
+    duration_hours: int | float | str | None = "auto",
     forecast_hours: int = 48,
-    simulation_resolution: int = 25,
+    simulation_resolution: int = DEFAULT_FORECAST_SIMULATION_RESOLUTION,
+    terrain_resolution: int | None = DEFAULT_TERRAIN_SURFACE_RESOLUTION,
+    frame_interval_minutes: int = DEFAULT_FORECAST_FRAME_INTERVAL_MINUTES,
+    overlay_basemap_styles: tuple[str | None, ...] = ("roadmap",),
+    animation_basemap_style: str | None = "roadmap",
+    show_overlay: bool = True,
     stability_class: str | None = None,
     release_height_m: float | None = None,
+    source_term_profile: str | None = None,
+    hazard_material: str | None = None,
+    emission_rate_override: float | None = None,
+    release_duration_minutes: float | None = None,
+    initial_pulse_minutes: float | None = None,
     show_animation: bool = True,
     verbose: bool = False,
 ) -> ForecastAlarmSimulation:
@@ -207,8 +331,15 @@ def run_forecast_alarm_demo(
         duration_hours=duration_hours,
         forecast_hours=forecast_hours,
         simulation_resolution=simulation_resolution,
+        terrain_resolution=terrain_resolution,
+        frame_interval_minutes=frame_interval_minutes,
         stability_class=stability_class,
         release_height_m=release_height_m,
+        source_term_profile=source_term_profile,
+        hazard_material=hazard_material,
+        emission_rate_override=emission_rate_override,
+        release_duration_minutes=release_duration_minutes,
+        initial_pulse_minutes=initial_pulse_minutes,
         progress_callback=_progress_line if verbose else None,
     )
     if verbose:
@@ -219,84 +350,25 @@ def run_forecast_alarm_demo(
             range(len(simulation.frames)),
             key=lambda idx: float(np.max(simulation.frames[idx].concentration)),
         )
-    plot_forecast_alarm_overlay(simulation, frame_index=peak_index)
+    if show_overlay:
+        plot_forecast_alarm_overlay(
+            simulation,
+            frame_index=peak_index,
+            basemap_styles=overlay_basemap_styles,
+        )
     animation = None
     if show_animation and simulation.frames:
-        animation = animate_forecast_alarm(simulation)
+        animation = animate_forecast_alarm(
+            simulation,
+            basemap_style=animation_basemap_style,
+        )
         simulation.animation = animation
         _display(animation)
 
-    _display_table(
-        "Top impacted neighborhoods",
-        simulation.top_neighborhoods.reindex(
-            columns=[
-                "Neighborhood",
-                "City",
-                "PostalCode",
-                "PeakBand",
-                "PeakConcentration",
-                "FirstImpactedTime",
-                "RecommendedAction",
-            ]
-        )
-        if not simulation.top_neighborhoods.empty
-        else pd.DataFrame(),
-    )
-    _display_table(
-        "Top impacted cities",
-        simulation.top_cities.reindex(
-            columns=[
-                "City",
-                "State",
-                "Country",
-                "PeakBand",
-                "PeakConcentration",
-                "FirstImpactedTime",
-                "HotspotCount",
-                "RecommendedAction",
-            ]
-        )
-        if not simulation.top_cities.empty
-        else pd.DataFrame(),
-    )
-    _display_table(
-        "Top impacted postal / ZIP codes",
-        simulation.top_postal_codes.reindex(
-            columns=[
-                "PostalCode",
-                "City",
-                "State",
-                "PeakBand",
-                "PeakConcentration",
-                "FirstImpactedTime",
-                "HotspotCount",
-                "RecommendedAction",
-            ]
-        )
-        if not simulation.top_postal_codes.empty
-        else pd.DataFrame(),
-    )
-    _display_table(
-        "Top impacted locations",
-        simulation.top_locations.reindex(
-            columns=[
-                "LocationLabel",
-                "Latitude",
-                "Longitude",
-                "PeakBand",
-                "PeakConcentration",
-                "PeakTime",
-                "FirstImpactedTime",
-            ]
-        )
-        if not simulation.top_locations.empty
-        else pd.DataFrame(),
-    )
-
-    if simulation.notice_payloads:
-        _display_table("Draft notice payloads", pd.DataFrame(simulation.notice_payloads))
+    notice_table = _notice_table_for_display(simulation)
+    if not notice_table.empty:
+        _display_table("Neighborhoods Requiring Notice", notice_table)
     else:
-        print("No neighborhoods, cities, or postal codes crossed the forecast-driven alert threshold.")
+        print("No neighborhoods crossed the forecast-driven notice threshold.")
 
-    print(MODEL_NOTES)
     return simulation

@@ -11,6 +11,9 @@ REQUIRED_DEMO_PACKAGES: dict[str, str] = {
     "matplotlib": "matplotlib",
     "ipywidgets": "ipywidgets",
     "certifi": "certifi",
+    "PIL": "Pillow",
+    "arabic_reshaper": "arabic-reshaper",
+    "bidi": "python-bidi",
 }
 
 
@@ -66,13 +69,23 @@ def run_notebook_incident_demo(
 ):
     ensure_demo_dependencies()
     enable_notebook_inline_plots()
+    from .config import (
+        DEFAULT_NOTEBOOK_INCIDENT_RESOLUTION,
+        DEFAULT_NOTEBOOK_TERRAIN_RESOLUTION,
+        DEFAULT_NOTEBOOK_TIMELAPSE_STEP_MINUTES,
+    )
     from .demo import run_forecast_alarm_demo
 
     kwargs.setdefault("incident_type", "leakage")
     kwargs.setdefault("name", "Forecast Hazard Demo")
-    kwargs.setdefault("duration_hours", 3)
-    kwargs.setdefault("forecast_hours", 6)
-    kwargs.setdefault("simulation_resolution", 10)
+    kwargs.setdefault("duration_hours", "auto")
+    kwargs.setdefault("forecast_hours", 48)
+    kwargs.setdefault("frame_interval_minutes", DEFAULT_NOTEBOOK_TIMELAPSE_STEP_MINUTES)
+    kwargs.setdefault("simulation_resolution", DEFAULT_NOTEBOOK_INCIDENT_RESOLUTION)
+    kwargs.setdefault("terrain_resolution", DEFAULT_NOTEBOOK_TERRAIN_RESOLUTION)
+    kwargs.setdefault("hazard_material", "generic_toxic_gas")
+    kwargs.setdefault("show_overlay", False)
+    kwargs.setdefault("show_animation", True)
     kwargs.setdefault("verbose", True)
     return run_forecast_alarm_demo(
         source_latitude=float(location[0]),

@@ -139,6 +139,59 @@ def gaussian_puff_ground_level(
     return prefactor * along * cross * vertical
 
 
+def gaussian_puff_ground_level_centered(
+    x_km,
+    y_km,
+    center_x_km: float,
+    center_y_km: float,
+    heading_rad: float,
+    q_total: float,
+    travel_distance_m: float,
+    release_height_m: float,
+    stability_class: str = "D",
+    receptor_elevation_m=None,
+    source_elevation_m: float | None = None,
+    min_spread_distance_m: float = 30.0,
+    sigma_x_scale: float = 1.0,
+    sigma_y_scale: float = 1.0,
+    sigma_z_scale: float = 1.0,
+):
+    dx_m = (x_km - center_x_km) * 1000.0
+    dy_m = (y_km - center_y_km) * 1000.0
+    along_m = np.cos(heading_rad) * dx_m + np.sin(heading_rad) * dy_m
+    cross_m = -np.sin(heading_rad) * dx_m + np.cos(heading_rad) * dy_m
+
+    spread_distance_m = max(float(travel_distance_m), float(min_spread_distance_m), 1.0)
+    sigma_y, sigma_z = sigma_yz(np.array([spread_distance_m]), stability_class)
+    base_sigma_y = float(sigma_y[0])
+    base_sigma_z = float(sigma_z[0])
+    sigma_y = max(base_sigma_y * max(float(sigma_y_scale), 0.25), 1.0)
+    sigma_z = max(base_sigma_z * max(float(sigma_z_scale), 0.25), 1.0)
+    sigma_x = max(
+        base_sigma_y * 1.35 * max(float(sigma_x_scale), 0.25),
+        min_spread_distance_m * 0.5,
+        1.0,
+    )
+
+    effective_release_height_m = max(float(release_height_m), 2.0)
+    if receptor_elevation_m is not None and source_elevation_m is not None:
+        elevation_offset_m = np.asarray(receptor_elevation_m, dtype=float) - float(source_elevation_m)
+        # Higher terrain effectively lifts the plume centerline relative to the local ground;
+        # lower terrain can slightly reduce that offset without driving it unrealistically to zero.
+        effective_release_height_m = np.maximum(
+            effective_release_height_m
+            + np.maximum(elevation_offset_m, 0.0) * 0.35
+            - np.maximum(-elevation_offset_m, 0.0) * 0.12,
+            2.0,
+        )
+
+    prefactor = q_total / (((2.0 * np.pi) ** 1.5) * sigma_x * sigma_y * sigma_z)
+    along = np.exp(-(along_m**2) / (2.0 * sigma_x**2))
+    cross = np.exp(-(cross_m**2) / (2.0 * sigma_y**2))
+    vertical = np.exp(-(effective_release_height_m**2) / (2.0 * sigma_z**2))
+    return prefactor * along * cross * vertical
+
+
 def compute_puff_concentration(
     cfg: PlumeConfig,
     t_s: float,

@@ -3,3 +3,6 @@ pandas
 matplotlib
 ipywidgets
 certifi
+Pillow
+arabic-reshaper
+python-bidi
